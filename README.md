@@ -28,14 +28,15 @@ to the bus, traffic sniffed passively.
 | `0x5C5` | **44** 04 09 E5 00 0C 00 7F | Handbrake | Bit 2 (`0x04`) of byte 0 set = engaged (this sample: not engaged) |
 | `0x5C5` | 44 **04** **09** **E5** 00 0C 00 7F | Odometer | Bytes 1–3, 24-bit big endian, 1 count = 1 km, no offset or scaling. This sample decodes to `0x0409E5` = 264677 km. Verified two ways: a later capture read `0x040C93` = 265363 km against a dashboard reading of exactly 265363 km, and the 715 km between the two captures matches the distance actually driven in between. Same message as the handbrake above |
 | `0x625` | xx **xx** xx xx xx xx xx xx | Light switch position | Byte 1: `0x00`=off, `0x40`=parking lights, `0x60`=low beam, `0x50`/`0x10`=high beam (two different raw values, likely high beam held vs. flash-to-pass — not conclusively distinguished) |
-| `0x625` | **xx** xx xx xx xx xx xx xx | Trunk | Bit 2 (`0x04`) of byte 0 set = open |
 | `0x358` | xx **xx** xx xx xx xx xx xx | Cabin blower | Bit 6 (`0x40`) of byte 1 set = on |
 | `0x358` | xx xx xx **xx** xx xx xx xx | Central locking status | Bits `0x14` of byte 3 set = locked |
 | `0x60D` | **00** 14 08 00 00 70 00 00 | Doors (bitmask) | Byte 0: Bit 3=front left, Bit 4=front right, Bit 5=rear left, Bit 6=rear right (this sample: no bits set, all doors closed) |
 | `0x60D` | 00 **14** 08 00 00 70 00 00 | Turn signals | Byte 1: Bit 5 (`0x20`)=left, Bit 6 (`0x40`)=right. Hazards set both at once (this sample: `0x14` = neither bit set, no turn signal active) |
 | `0x60D` | 00 14 **08** 00 00 70 00 00 | Rear fog light | Bit 2 (`0x04`) of byte 2 set = on (this sample: `0x08` = bit 2 not set, off) |
 | `0x60D` | 00 14 08 00 00 70 **00** 00 | Reverse light | Bit 4 (`0x10`) of byte 6 set = reverse light on (this sample: off). What was actually tested is the light coming on when shifting into reverse, not a transmission gear-position signal — confirmed over four independent engage/disengage cycles |
-| `0x35D` | xx xx **xx** xx xx xx xx xx | Wipers | Bit 6 (`0x40`) of byte 2 set = running. Bit 7 also appeared when opening the trunk (likely a different consumer on the same byte) |
+| `0x35D` | xx xx **xx** xx xx xx xx xx | Wipers | Bit 6 (`0x40`) of byte 2 set = running |
+| `0x35D` | xx xx **xx** xx xx xx xx xx | Trunk | Bit 7 (`0x80`) of byte 2 set = open. Byte 0 of `0x625` also changes when the trunk is opened and was used for this at first, but that byte turns out to carry several consumers at once (see rear window heater below) and produced false positives — the indicator lit up whenever the wipers ran. Bit 7 here is a clean single bit, right next to the wiper bit in a byte that is otherwise understood |
+| `0x35D` | **xx** xx xx xx xx xx xx xx | Rear window heater | Byte 0, measured `0x88` (off) ↔ `0x8E` (on) over four on/off cycles. Bits 1 and 2 change together (`0x88 ^ 0x8E = 0x06`); which of the two is the heater itself cannot be separated from two states alone, so the pattern is matched as a whole rather than guessing a single bit. `0x625` byte 0 shows `0x02` ↔ `0x03` for the same action — the usual second message, but on the byte that is already known to be shared |
 
 `0x215` byte 1 (`0x30`↔`0x70`, bit 6) showed the identical transition in the same reverse-light tests — likely a redundant copy of the same signal for a different ECU. Not decoded separately; either byte works.
 
