@@ -22,6 +22,7 @@ to the bus, traffic sniffed passively.
 |---|---|---|---|
 | `0x285` | **xx** xx xx xx xx xx xx xx | Speed | `byte0 * 1.131` = km/h |
 | `0x181` | **xx** **xx** xx xx xx xx xx xx | RPM | `(byte0*256 + byte1) / 8` = rpm |
+| `0x551` | **6F** 28 00 80 xx xx xx xx | Coolant temperature | Byte 0, degrees Celsius = raw &minus; 40. This sample decodes to 111 &minus; 40 = 71 &deg;C. Confirmed two ways: the factory manual's CAN signal chart (LAN-19) lists "Engine coolant temperature signal" as transmitted by the ECM and received by the combination meter and BCM, and a logged drive showed byte 0 rising 111 -> 133, i.e. 71 -> 93 &deg;C, which matches a thermostat-controlled warm engine. Worth noting because it is easy to assume otherwise: this trim has no temperature gauge at all, only a red warning lamp, yet the value is still broadcast |
 | `0x2DE` | 00 00 80 09 5F FF **0D** **1D** | Fuel level | 16-bit, big endian, bytes 6–7. (46 L tank, reserve ≈ 10 L) this worked out to roughly 79–80 raw units per liter — a starting point to verify against, not a fixed constant |
 | `0x181` | 00 00 2A **10** 4D 20 00 00 | Accelerator pedal | Byte 3, drive-by-wire pedal position. Two-point calibration from measured samples at idle (`0x10` = 16) and full throttle (`0xE0` = 224): `(byte3-16)*100/208`, clamped 0–100 %. Same message as RPM above |
 | `0x354` | xx xx xx xx xx xx **xx** xx | Brake pedal | Bit 4 (`0x10`) of byte 6 set = brake pressed |
@@ -44,7 +45,6 @@ to the bus, traffic sniffed passively.
 
 | Signal | Status | Notes |
 |---|---|---|
-| Coolant temperature | Not found passively | Available via OBD2 (Mode 01 PID 0x05) on vehicles where the ECU answers active CAN requests — this one doesn't, diagnostics run over K-Line instead |
 | Battery / system voltage | Searching | Expect two regimes: resting (~12.4V) vs. charging (~14V) once running |
 | ABS active | Searching | Correlated with brake pedal + hard deceleration, no confirmed byte yet |
 | Oil pressure warning lamp | Not started | Only lights briefly during cranking before oil pressure builds |
