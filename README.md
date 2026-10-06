@@ -22,7 +22,7 @@ correlated once. The **Source** column names the ECU that sends the frame (see [
 - [Engine](#engine) · [Speed and wheels](#speed-and-wheels) · [Fuel](#fuel) · [Body (BCM)](#body-bcm) · [Lights and warnings](#lights-and-warnings)
 - [Starter](#starter) · [Network management](#network-management) · [Immobilizer (NATS)](#immobilizer-nats)
 - [Diagnostics](#diagnostics) · [Vehicle constants](#vehicle-constants)
-- [Probable](#probable) · [Unresolved](#unresolved) · [Not on the bus / not found](#not-on-the-bus--not-found)
+- [Status bits](#status-bits) · [Probable](#probable) · [Unresolved](#unresolved) · [Not on the bus / not found](#not-on-the-bus--not-found)
 - [Corrections to earlier versions](#corrections-to-earlier-versions)
 
 ## Quick reference by ID
@@ -46,7 +46,8 @@ correlated once. The **Source** column names the ECU that sends the frame (see [
 | `0x285` | ABS | 4 | Vehicle speed, whole km/h | ≈ `0x354` speed / 1.013 |
 | `0x2DE` | Meter | 6–7 | Fuel level sender | raw, non-linear, `0xFFFF` below range, updated every 30 s while driving |
 | `0x354` | ABS | 0–1 | Speed, high-res | `raw * 0.01` km/h |
-| `0x354` | ABS | 2–3 | Distance counter | 16-bit, ≈ 0.10 m per count, wraps |
+| `0x354` | ABS | 2–3 | Distance counter | 16-bit, 0.108 m per count (9240 counts per odometer km), wraps |
+| `0x354` | ABS | 5 · `0x80` | Brake control active | set during full braking (see [Speed and wheels](#speed-and-wheels)) |
 | `0x354` | ABS | 4 · `0x0A` | ABS / brake warning lamp | set ≈ 1 s at ignition on (bulb check) and while cranking |
 | `0x354` | ABS | 6 · `0x10` | Brake pedal | set = pressed |
 | `0x355` | Meter | 0–1 | Speed, cluster group | `raw * 0.01` km/h |
@@ -65,7 +66,10 @@ correlated once. The **Source** column names the ECU that sends the frame (see [
 | `0x551` | ECM | 5 · `0x03` | Engine status | `0` stop, `1` stall, `2` run, `3` crank |
 | `0x5C5` | Meter | 0 · `0x04` | Handbrake | set = engaged |
 | `0x5C5` | Meter | 1–3 | Odometer | 24-bit, 1 count = 1 km |
-| `0x5E4` | EPS? | 0 · `0x04` | Warning lamp, on until the engine runs | see [Lights and warnings](#lights-and-warnings) |
+| `0x300` | EPS | 0 | Steering assist level | 0 straight / engine off, rises with steering, up to ≈ 62 when steering at standstill |
+| `0x5E4` | EPS | 0 · `0x04` | EPS warning lamp | on with ignition until ≈ 1–3 s after the engine runs |
+| `0x5C5` | Meter | 0 · `0x20` | Fuel below sender range | set while `0x2DE` bytes 6–7 read `0xFFFF` |
+| `0x551` | ECM | 3 · `0x20` | MIL (check engine lamp) | on with ignition and engine not running, off as soon as it runs |
 | `0x60D` | BCM | 0 · `0x06` | Light switch | `0x04` position 1 (parking), `0x06` position 2 (low beam) |
 | `0x60D` | BCM | 0 · `0x08` `0x10` `0x20` `0x40` | Doors FL, FR, RL, RR | set = open |
 | `0x60D` | BCM | 0 · `0x80` | **Tailgate** | set = open (byte 2 `0x08` is the inverse) |
@@ -144,15 +148,24 @@ from corners (outer wheels faster) and wheelspin when pulling away (only the fro
 | Front | `0x284` bytes 0–1 | `0x284` bytes 2–3 |
 | Rear | `0x285` bytes 0–1 | `0x285` bytes 2–3 |
 
-**Distance counter – `0x354` bytes 2–3:** 16-bit counter that only advances while the car moves, ≈ 0.10 m per
-count against the speed integral, wraps at 65536.
+**Distance counter – `0x354` bytes 2–3:** 16-bit counter that only advances while the car moves, wraps at 65536.
+**9240 counts per km** between odometer increments (272 km evaluated), i.e. 0.108 m per count.
+
+**Brake control active – `0x354` byte 5, bit `0x80`:** checked in 26 hard stops recorded at the full frame
+rate. Set in 6 of them, always with the brake pressed, about 0.3–0.9 s *before* peak deceleration. It is not a
+plain deceleration threshold (other stops were as hard without it), and in 5 of the 6 the wheels showed no
+lock-up dips; in the one stop where the wheels visibly pulsed, it was set. Most likely the ABS unit's control
+flag (including the pressure-hold phase), not only "wheels are being released".
 
 **Vehicle moving – `0x35D` byte 4, bit `0x40`:** sets between 5.7 and 15.8 km/h, clears between 0 and 3.4 km/h,
 never set at standstill. A noise-free "car is rolling" flag (GPS reports 0.6–2.4 km/h while parked). It is in a
 BCM frame, so it is derived from the meter's speed and lags a little.
 
-**Counters:** `0x284`/`0x285` byte 6 is a shared message counter, byte 7 a checksum. `0x280` bytes 2–3 and
-`0x5E4` bytes 1–2 are counters/checksums as well (no relation to any physical signal).
+**Counter and checksum – `0x284`/`0x285`:** byte 6 is a message counter (+1 per frame, frames every 20 ms).
+Byte 7 is a checksum: **`(b0 + b1 + … + b6 + (ID >> 8) + (ID & 0xFF)) & 0xFF`** – i.e. `+ 0x86` for `0x284`
+and `+ 0x87` for `0x285`. Verified on 22,580 / 22,607 of 22,608 frames. Needed if you ever transmit these.
+`0x280` bytes 2–3 and `0x5E4` bytes 1–2 are counters/check values as well; their rule is not a simple sum and
+needs frame-rate captures (`0x5E4` byte 1 is *not* a steering torque – no correlation with steering).
 
 ## Fuel
 
@@ -204,9 +217,12 @@ beam (probably held vs. flash-to-pass).
 **Oil pressure warning – `0x625` byte 3, bit `0x80`:** set with ignition on and engine off, clears one second
 after the engine starts, returns at shutdown. The oil pressure switch is wired to the IPDM.
 
-**`0x5E4` byte 0, bit `0x04`:** behaves exactly like the oil lamp (on with ignition, off ≈ 1–2 s after the engine
-starts). But `0x5E4` wakes with the ignition-powered units, not with the IPDM, so it is more likely the **EPS
-warning lamp** (the EPS also keeps its lamp on until the engine runs) than a copy of the oil signal.
+**EPS warning lamp – `0x5E4` byte 0, bit `0x04`:** looks like the oil lamp at first sight, but it is a separate
+lamp: after starting it goes out up to 3 s later than the oil lamp, and twice it was still on at 1743 rpm while
+the oil lamp was already off. `0x5E4` also wakes with the ignition-powered units, not with the IPDM.
+
+**MIL – `0x551` byte 3, bit `0x20`:** on with the ignition while the engine status is stop/stall, off the moment
+it runs – the bulb-check behaviour of the check-engine lamp (no fault codes were stored during the logs).
 
 **ABS / brake warning lamp – `0x354` byte 4, bits `0x0A`:** set for about one second after ignition on (bulb
 check, also when the engine is not started afterwards) and again while cranking (voltage dip).
@@ -265,25 +281,31 @@ Measured on this car (original tyre size), useful for gear detection and shift h
 
 Pedal calibration: `0x10` released, `0xE0` floored. Overrun fuel cut ends below about 1300 rpm.
 
-## Probable
+## Status bits
 
-Consistent in the data, but not yet backed by a second kind of evidence:
+| Meaning | Bits |
+|---|---|
+| Ignition on | `0x35D` byte 0 `0x80`, `0x60D` byte 1 `0x04`, `0x625` byte 3 `0x10`, `0x5C5` byte 0 `0x40`, `0x551` byte 3 `0x80` (ECM, 2 s later) – 99.7–99.99 % identical |
+| Ignition off (inverse) | `0x60D` byte 6 `0x20`, `0x215` byte 1 `0x80`, `0x35D` byte 4 `0x20`, `0x5C5` byte 0 `0x80` |
+| ECM start-up phase | `0x1F9` byte 0 `0x04`: set for the first ≈ 2 s after the ECM wakes |
+| Engine status bit 0 (stall/crank) | `0x1F9` byte 0 `0x10`, mirrors `0x551` byte 5 bit `0x01` |
+| IPDM active | `0x625` byte 3 `0x01` (`0x02` = inverse): with ignition, and for ≈ 5 s after each wake-up event (locking, door, hazards) |
+| Immobilizer check | `0x511` byte 0 = `0x05` and `0x500` byte 0 `0x04` appear only at key-on / cranking |
+
+## Probable
 
 | ID | Byte · bits | What was seen |
 |---|---|---|
-| `0x354` | 5 · `0x80` | Set only during the three hardest stops in the logs; other stops just as hard did not set it, so it is not a plain deceleration threshold. Most likely **ABS control active** (depends on grip) |
-| `0x300` | 0 | Small integer: 0 at standstill, highest at 1–10 km/h, falling with speed, higher when steering. Looks like the **EPS assist** level |
-| `0x5C5` | 0 · `0x20` | Set only while the fuel sender reads `0xFFFF` – fuel below the sender's range |
 | `0x2DE` | 4 low nibble + 5 | `0xFFF` below ≈ 20 km/h, `0x000` above (switches at 19–21 km/h). A field the meter of this trim does not fill, marked invalid at low speed |
-| `0x5C5` | 0 · `0x40`/`0x80` | `0x40` with ignition on, `0x80` off; a short `0x40` pulse when locking/unlocking with the hazard flash – the meter waking up briefly |
 
 ## Unresolved
 
 | ID | Byte · bits | What is known |
 |---|---|---|
 | `0x2DE` | 4 high nibble (0/1/2) | Changes only on the 30-s fuel-level update and survives ignition cycles. Unrelated to speed (moving averages 30 s – 20 min), fuel level, fuel change or lights |
-| `0x354` | 6 · `0x40` | One single event: start of braking at 34 km/h in a tight turn |
+| `0x354` | 6 · `0x40` | Two events (one at 1 Hz, one at full rate, ≈ 1.1 s long): both exactly when the brake was applied in a curve. 41 other braking-in-a-curve situations did not set it |
 | `0x60D` | 3 · `0x02` | One single event: ignition off, tailgate and two doors open, light switch turned off at the same moment |
+| `0x600`, `0x602`, `0x682` | all | No payload (all zero) |
 
 ## Not on the bus / not found
 
