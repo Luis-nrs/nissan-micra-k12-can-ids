@@ -155,7 +155,9 @@ from corners (outer wheels faster) and wheelspin when pulling away (only the fro
 rate. Set in 6 of them, always with the brake pressed, about 0.3–0.9 s *before* peak deceleration. It is not a
 plain deceleration threshold (other stops were as hard without it), and in 5 of the 6 the wheels showed no
 lock-up dips; in the one stop where the wheels visibly pulsed, it was set. Most likely the ABS unit's control
-flag (including the pressure-hold phase), not only "wheels are being released".
+flag (including the pressure-hold phase), not only "wheels are being released". Confirmed at full rate on
+7 Oct 2026: brake applied at 83 km/h, 160 ms later the rear right wheel read 67 km/h against 73–75 km/h at the
+front – and exactly in that frame byte 5 went from `0x10` to `0x90`.
 
 **Vehicle moving – `0x35D` byte 4, bit `0x40`:** sets between 5.7 and 15.8 km/h, clears between 0 and 3.4 km/h,
 never set at standstill. A noise-free "car is rolling" flag (GPS reports 0.6–2.4 km/h while parked). It is in a
@@ -164,8 +166,18 @@ BCM frame, so it is derived from the meter's speed and lags a little.
 **Counter and checksum – `0x284`/`0x285`:** byte 6 is a message counter (+1 per frame, frames every 20 ms).
 Byte 7 is a checksum: **`(b0 + b1 + … + b6 + (ID >> 8) + (ID & 0xFF)) & 0xFF`** – i.e. `+ 0x86` for `0x284`
 and `+ 0x87` for `0x285`. Verified on 22,580 / 22,607 of 22,608 frames. Needed if you ever transmit these.
-`0x280` bytes 2–3 and `0x5E4` bytes 1–2 are counters/check values as well; their rule is not a simple sum and
-needs frame-rate captures (`0x5E4` byte 1 is *not* a steering torque – no correlation with steering).
+`0x280` bytes 2–3 and `0x5E4` bytes 1–2 are **not** counters or checksums (full-rate capture, 13 min, 7 Oct 2026).
+Both use the same layout: a 10-bit value made of byte A bits 0–5 (high part) and the high nibble of byte B (low
+part); bits 6–7 of byte A and the low nibble of byte B are always 0.
+
+- `0x280` (meter): `((b2 & 0x3F) << 4) | (b3 >> 4)` is uniformly random – all 1024 values occur (20–55 times each
+  in 36,833 frames), consecutive values are independent, and it does not depend on rpm, speed, steering or the
+  speed in bytes 4–5 (even at one constant speed value nearly every frame differs). Treat it as noise / a random
+  field; you cannot predict it, and you do not need it.
+- `0x5E4` (EPS): `((b1 & 0x3F) << 4) | (b2 >> 4)` wraps around modulo 1024. With the engine idling and the wheel
+  untouched it runs through the same 16-frame cycle (1.6 s) over and over, always with the fixed pair 465 → 49 at
+  the same position. As soon as the power steering assists (`0x300` byte 0 > 0), the cycle breaks and the value
+  moves much faster. An EPS-internal quantity; it carries no steering angle or torque you could use directly.
 
 ## Fuel
 
@@ -251,7 +263,10 @@ After a wake-up it reads `0x00` for about 2 s, then `0x03` again. Useful to tell
 wiring dropout.
 
 **`0x600`, `0x602`, `0x682`:** appear on the bus but carry no data – every byte was 0 in every sample.
-`0x682` is the first frame after a wake-up; `0x600`/`0x602` only showed up together with OBD traffic.
+`0x682` (1 byte, `00`) is the **bus wake-up call**: at full rate it shows up as 116 back-to-back copies within
+16 ms. The sender is alone on the bus at that moment, nobody acknowledges, so the CAN controller retransmits
+until another unit wakes up; 50 ms later the BCM (`0x35D`) answers and the rest of the bus follows within 50 ms.
+`0x600`/`0x602` only showed up together with OBD traffic.
 
 ## Immobilizer (NATS)
 
@@ -296,7 +311,7 @@ Pedal calibration: `0x10` released, `0xE0` floored. Overrun fuel cut ends below 
 
 | ID | Byte · bits | What was seen |
 |---|---|---|
-| `0x2DE` | 4 low nibble + 5 | `0xFFF` below ≈ 20 km/h, `0x000` above (switches at 19–21 km/h). A field the meter of this trim does not fill, marked invalid at low speed |
+| `0x2DE` | 4 low nibble + 5 | `0xFFF` below ≈ 20 km/h, `0x000` above (switches at 19–21 km/h; 26 switches on one full-rate drive, all between 19.0 and 20.1 km/h, both directions). A field the meter of this trim does not fill, marked invalid at low speed |
 
 ## Unresolved
 
@@ -305,7 +320,7 @@ Pedal calibration: `0x10` released, `0xE0` floored. Overrun fuel cut ends below 
 | `0x2DE` | 4 high nibble (0/1/2) | Changes only on the 30-s fuel-level update and survives ignition cycles. Unrelated to speed (moving averages 30 s – 20 min), fuel level, fuel change or lights |
 | `0x354` | 6 · `0x40` | Two events (one at 1 Hz, one at full rate, ≈ 1.1 s long): both exactly when the brake was applied in a curve. 41 other braking-in-a-curve situations did not set it |
 | `0x60D` | 3 · `0x02` | One single event: ignition off, tailgate and two doors open, light switch turned off at the same moment |
-| `0x600`, `0x602`, `0x682` | all | No payload (all zero) |
+| `0x600`, `0x602` | all | No payload (all zero), only with OBD traffic |
 
 ## Not on the bus / not found
 
