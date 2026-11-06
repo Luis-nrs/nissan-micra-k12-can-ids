@@ -40,7 +40,8 @@ Bytes are numbered 0–7, bit masks in hex (`0x10` = bit 4), multi-byte values b
 | `0x35D` | BCM | 2 · `0x40` / `0x80` | Front wiper / washer | set = on |
 | `0x35D` | BCM | 4 · `0x40` | Vehicle moving | set from ≈ 6–16 km/h, clears below ≈ 3 km/h |
 | `0x551` | ECM | 0 | Coolant temperature | `b0 − 40` °C (copy in `0x60D` byte 5) |
-| `0x511` | ECM | 0–6 | Immobilizer exchange | 7 bytes, not decoded, leave it alone |
+| `0x511` | ECM | 0 | Immobilizer status | `0` normal, `5` authentication frame (NATS), see [Immobilizer](#immobilizer) |
+| `0x511` | ECM | 1–6 | Immobilizer value | 32-bit + 16-bit field, counter when running, rolling code at key-on |
 | `0x551` | ECM | 1 | Fuel injection counter | 8-bit counter, **≈ 0.092 ml per count** |
 | `0x551` | ECM | 3 · `0x20` | MIL (check engine) | on with ignition until the engine runs |
 | `0x551` | ECM | 5 · `0x03` | Engine status | `0` stop, `1` stall, `2` run, `3` crank |
@@ -115,4 +116,10 @@ Full load on the 48 kW engine: 104 Nm at 2500–3000 rpm, 102 at 4000, 90 at 500
 - **What the ECM reads from CAN:** `0x284`, `0x500`, `0x625`, `0x358`, `0x35D`, `0x300`. It sends `0x181`, `0x1F9`,
   `0x511`, `0x551`. Idle target is ≈ 650 rpm and rises to ≈ 800 rpm with lights or rear heater (`0x625`) or
   the heater blower (`0x358`).
+- **Immobilizer:** `0x511` from the ECM. Byte 0 is a 3-bit status, in practice `0` or `5`. With byte 0 = `5`
+  the remaining 6 bytes are a unique, high-entropy 48-bit value sent once at key-on while the engine is still
+  off — a rolling code (NATS authentication), never repeated across starts. With byte 0 = `0` the same bytes
+  carry a free-running timer / battery-backed counter (often `06 40 06 40 04 00`) or all-zero when asleep.
+  The check lives outside the fuel/torque path, so it does not interfere with normal decoding — but do not
+  replay or tamper with `0x511`.
 - **Not on the bus:** battery voltage, outside temperature, steering angle, fuel reserve lamp.
