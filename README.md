@@ -2,7 +2,8 @@
 
 Decoded CAN signals of a 2009 Nissan Micra K12 (1.2 L CR12DE, 5-speed manual, ABS, no A/C, no Intelligent Key).
 Bus: **500 kbit/s, 11-bit IDs, OBD-II pins 6/14**. Every signal was checked against the real switch, pedal,
-dashboard or fuel receipt.
+dashboard or fuel receipt. The ECM entries were also traced in the ECU firmware (Hitachi MEC37, 23710-BG14B)
+and compared with live RAM reads.
 
 Bytes are numbered 0–7, bit masks in hex (`0x10` = bit 4), multi-byte values big endian.
 
@@ -11,16 +12,16 @@ Bytes are numbered 0–7, bit masks in hex (`0x10` = bit 4), multi-byte values b
 | ID | ECU | Byte · bits | Signal | Decode |
 |---|---|---|---|---|
 | `0x181` | ECM | 0–1 | Engine speed | `(b0*256 + b1) / 8` rpm |
-| `0x181` | ECM | 2 | Throttle plate | ≈ 42 closed, ≈ 55 idle, ≈ 100 wide open |
+| `0x181` | ECM | 2 | Indicated torque | `(b2 − 50) * 2` Nm, calculated from air mass, includes friction, see [Torque](#torque) |
 | `0x181` | ECM | 3 | Accelerator pedal | `(b3 − 16) * 100 / 208` %, `0x10` released, `0xE0` floored |
-| `0x181` | ECM | 4 | Engine load | idle ≈ 52, overrun ≤ 46, full load ≈ 96–100 |
+| `0x181` | ECM | 4 | Requested net torque | `(b4 − 50) * 2` Nm, idle ≈ 52, overrun ≤ 46, full load ≈ 96–102 |
 | `0x1F9` | ECM | 0 · `0x20` | Engine running | set = running |
 | `0x1F9` | ECM | 0 · `0x40` | Radiator fan request | set = fan on (from ≈ 95 °C) |
 | `0x1F9` | ECM | 2–3 | Engine speed (copy) | as `0x181` bytes 0–1 |
 | `0x215` | IPDM | 1 · `0x03` | Starter engaged | ≈ 1 s while cranking |
 | `0x215` | IPDM | 1 · `0x40` | Reverse switch | set = reverse |
-| `0x284` | ABS | 0–1 / 2–3 | Wheel speed front right / front left | `raw16 * 1.13 / 256` km/h |
-| `0x285` | ABS | 0–1 / 2–3 | Wheel speed rear right / rear left | `raw16 * 1.13 / 256` km/h |
+| `0x284` | ABS | 0–1 / 2–3 | Wheel speed front right / front left | `raw16 * 1.12 / 256` km/h |
+| `0x285` | ABS | 0–1 / 2–3 | Wheel speed rear right / rear left | `raw16 * 1.12 / 256` km/h, ≈ 2.2 % below GPS |
 | `0x285` | ABS | 4 | Vehicle speed, whole km/h | |
 | `0x2DE` | Meter | 6–7 | Fuel level sender | raw, non-linear, see [Fuel](#fuel) |
 | `0x300` | EPS | 0 | Steering assist level | 0 straight, up to ≈ 62 steering at standstill |
@@ -39,7 +40,8 @@ Bytes are numbered 0–7, bit masks in hex (`0x10` = bit 4), multi-byte values b
 | `0x35D` | BCM | 2 · `0x40` / `0x80` | Front wiper / washer | set = on |
 | `0x35D` | BCM | 4 · `0x40` | Vehicle moving | set from ≈ 6–16 km/h, clears below ≈ 3 km/h |
 | `0x551` | ECM | 0 | Coolant temperature | `b0 − 40` °C (copy in `0x60D` byte 5) |
-| `0x551` | ECM | 1 | Fuel injection counter | 8-bit counter, **0.1037 ml per count** |
+| `0x511` | ECM | 0–6 | Immobilizer exchange | 7 bytes, not decoded, leave it alone |
+| `0x551` | ECM | 1 | Fuel injection counter | 8-bit counter, **≈ 0.092 ml per count** |
 | `0x551` | ECM | 3 · `0x20` | MIL (check engine) | on with ignition until the engine runs |
 | `0x551` | ECM | 5 · `0x03` | Engine status | `0` stop, `1` stall, `2` run, `3` crank |
 | `0x5C5` | Meter | 0 · `0x04` | Handbrake | set = engaged |
@@ -63,8 +65,12 @@ Bytes are numbered 0–7, bit masks in hex (`0x10` = bit 4), multi-byte values b
 
 ## Fuel
 
-- **Consumption:** take differences of `0x551` byte 1 (8-bit, wraps) × 0.1037 ml. The counter stops completely
-  during overrun fuel cut. Warm idle ≈ 0.75–0.8 L/h.
+- **Consumption:** take differences of `0x551` byte 1 (8-bit, wraps) × 0.0919 ml (full-to-full over 4 fuel receipts,
+  rather an upper limit since lost frames push it up). The counter stops completely during overrun fuel cut.
+  Warm idle ≈ 0.75–0.8 L/h.
+- **Instant estimate:** counts/s ≈ `0.000285 * rpm * (b2 − 44) − 0.40` with `b2` from `0x181` (R² 0.99 over 726 s,
+  `b4` only reaches 0.965).
+- **Overrun fuel cut:** pedal released, `0x181` byte 2 ≤ 46 and the counter standing still.
 - **Fuel level `0x2DE` bytes 6–7:** non-linear, calibrate with several (raw, litres) points. Reserve lamp at
   raw ≈ 699 (≈ 10 L), full tank (46 L) ≈ 5760–5790. Updated every 30 s while driving, moves in steps,
   `0xFFFF` below range. The reserve lamp itself is not on CAN.
@@ -81,7 +87,20 @@ Bytes are numbered 0–7, bit masks in hex (`0x10` = bit 4), multi-byte values b
 |---|---|---|---|---|---|
 | rpm per km/h | 132.7 | 73.3 | 51.3 | 36.7 | 29.2 |
 
-Overrun fuel cut ends below ≈ 1300 rpm.
+Overrun fuel cut (warm engine) starts above ≈ 1400 rpm and ends at ≈ 1000 rpm.
+
+## Torque
+
+`0x181` carries two torque values, both in 2 Nm steps with an offset of 50:
+
+- **Byte 4** = requested torque, `50 + request / 20` with the ECU's request in 0.1 Nm. Checked against live RAM:
+  mean error 0.02 counts. During tip-in the ECU's anti-jerk filter holds it back for 0.2–0.3 s.
+- **Byte 2** = indicated torque, calculated from air mass. In steady state it sits above byte 4 by the friction:
+  ≈ 0 Nm up to 2500 rpm, 4 Nm at 3500, 10 Nm at 4500–5500, 14 Nm at 6000. It is **not** the throttle plate,
+  as earlier versions of this list said (it correlates 0.99 with load).
+
+Useful live value: `Nm = (min(b2, b4) − 50) * 2`, `kW = Nm * rpm / 9549`. These are ECU figures, not a dyno.
+Full load on the 48 kW engine: 104 Nm at 2500–3000 rpm, 102 at 4000, 90 at 5000, 72 at 6000.
 
 ## Good to know
 
@@ -91,4 +110,9 @@ Overrun fuel cut ends below ≈ 1300 rpm.
   `00`) is the wake-up call. BCM, IPDM and meter wake with the bus; ECM, ABS and EPS only with the ignition.
 - **OBD-II:** requests on `0x7DF`, engine answers on `0x7E8`. Two testers sending on `0x7DF` at once collide
   (bus-off) – wait for silence from the other one.
+- **Diagnostics on CAN:** ISO-TP, response ID = request ID + 0x20: `0x740` ABS, `0x742` probably EPS,
+  `0x745` probably BCM, `0x74D` IPDM. No diagnostic address found for the meter.
+- **What the ECM reads from CAN:** `0x284`, `0x500`, `0x625`, `0x358`, `0x35D`, `0x300`. It sends `0x181`, `0x1F9`,
+  `0x511`, `0x551`. Idle target is ≈ 650 rpm and rises to ≈ 800 rpm with lights or rear heater (`0x625`) or
+  the heater blower (`0x358`).
 - **Not on the bus:** battery voltage, outside temperature, steering angle, fuel reserve lamp.
